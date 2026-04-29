@@ -3,7 +3,13 @@ import pandas as pd
 import json
 import uuid
 import re
+import os
+import google.generativeai as genai
 from collections import Counter
+
+# --- Cấu hình API AI ---
+# Bạn hãy thay 'YOUR_API_KEY' bằng API Key lấy từ Google AI Studio nhé
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY"))
 
 # --- Cấu hình trang ---
 st.set_page_config(page_title="Kho Tàng Học", page_icon="📖", layout="centered")
@@ -80,37 +86,70 @@ def play_sound(is_correct):
 
 inject_custom_css()
 
-# --- 4. TRÌNH BIÊN DỊCH MARKDOWN ---
+# --- 4. TRÌNH BIÊN DỊCH MARKDOWN (ĐÃ FIX LỖI) ---
 def parse_markdown_quiz(md_content):
     md_content = md_content.replace(r'\frac', r'\dfrac') # Tự động làm to phân số
     quiz_data = []
     blocks = re.split(r'\n\s*\n', md_content.strip())
+    
     for block in blocks:
         lines = block.strip().split('\n')
-        question, options, answer, explanation = "", [], "", "Không có giải thích."
+        question, options, answer, explanation = "", [], "", "Không có giải thích chi tiết."
+        
         for line in lines:
-            line = re.sub(r'^[-*]\s+', '', line.strip())
-            if re.match(r'^(?:\*\*|### )?Câu', line):
-                question = re.sub(r'^(?:\*\*|### )?Câu \d+:\s*', '', line).strip('* ')
+            # LÀM SẠCH DỮ LIỆU CỰC MẠNH
+            # 1. Xóa bỏ thẻ in đậm, in nghiêng của Markdown (* và #)
+            line = line.replace('*', '').replace('#', '').strip()
+            # 2. Xóa bỏ các dấu gạch đầu dòng (- hoặc *) ở đầu câu
+            line = re.sub(r'^[-]\s+', '', line)
+            
+            if re.match(r'^Câu', line):
+                question = re.sub(r'^Câu \d+:\s*', '', line).strip()
             elif re.match(r'^[A-D][\.\)]', line):
                 options.append(re.sub(r'^[A-D][\.\)]\s*', '', line).strip())
             elif "Đáp án:" in line:
-                ans_char = line.split(":")[-1].strip().upper()
+                # Lấy chính xác ký tự cuối cùng để tránh dính khoảng trắng hay ký tự lạ
+                ans_char = line.split(":")[-1].strip().upper()[-1]
                 if ans_char in "ABCD" and len(options) >= (ord(ans_char)-65+1):
                     answer = options[ord(ans_char)-65]
             elif "Giải thích:" in line:
                 explanation = line.split(":")[-1].strip()
+                
         if question and len(options) >= 2 and answer:
             quiz_data.append({"question": question, "options": options, "answer": answer, "explanation": explanation})
+            
     return quiz_data
 
-# --- 5. LUỒNG GIAO DIỆN CHÍNH ---
+# --- 5. HÀM GỌI AI SINH ĐỀ ---
+def generate_quiz_from_ai(chu_de, muc_do, so_luong=5):
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        Tạo {so_luong} câu hỏi trắc nghiệm Toán học chủ đề: {chu_de}, mức độ: {muc_do}.
+        BẮT BUỘC trả về đúng định dạng Markdown sau, không thêm bất kỳ chữ nào khác:
+        
+        Câu 1: [Nội dung câu hỏi]
+        A. [Đáp án A]
+        B. [Đáp án B]
+        C. [Đáp án C]
+        D. [Đáp án D]
+        Đáp án: [A, B, C hoặc D]
+        Giải thích: [Giải thích ngắn gọn]
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        st.error(f"Lỗi kết nối AI: {e}")
+        return None
 
-# LUỒNG A: CHƯA VÀO PHÒNG THI
+# --- 6. LUỒNG GIAO DIỆN CHÍNH ---
+
+# LUỒNG A: CHƯA VÀO PHÒNG THI (MÀN HÌNH CHÍNH)
 if not st.session_state.active_quiz_id:
     st.title("📖 Kho Tàng Học - Nền Tảng Trắc Nghiệm")
     tab_hs, tab_gv, tab_tk = st.tabs(["🎓 Cổng Học Sinh", "👨‍🏫 Cổng Giáo Viên", "📊 Thống Kê"])
     
+    # ---------------- TAB 1: HỌC SINH ----------------
     with tab_hs:
         st.subheader("Nhập mã phòng để bắt đầu")
         room_code = st.text_input("Mã Game (Quiz ID):").strip().upper()
@@ -121,17 +160,41 @@ if not st.session_state.active_quiz_id:
             else:
                 st.error("Mã phòng không tồn tại!")
 
+    # ---------------- TAB 2: GIÁO VIÊN ----------------
     with tab_gv:
-        manual_md = st.text_area("Dán mã Markdown bộ câu hỏi vào đây:", height=200)
-        if st.button("🚀 Tạo Đề & Lấy Link", type="primary"):
-            data = parse_markdown_quiz(manual_md)
-            if data:
+        st.markdown("### Tạo Đề Mới")
+        create_mode = st.radio("Phương thức tạo đề:", ["🤖 Nhờ AI tự động", "📝 Dán mã Markdown"])
+        
+        data = None # Biến tạm lưu dữ liệu quiz
+        
+        if create_mode == "🤖 Nhờ AI tự động":
+            chu_de = st.text_input("Nhập chủ đề Toán học (VD: Lượng giác lớp 10):")
+            muc_do = st.selectbox("Mức độ:", ["Dễ", "Trung bình", "Khó"])
+            if st.button("✨ Nhờ AI Sinh Đề & Lấy Link", type="primary"):
+                if chu_de:
+                    with st.spinner("Đang nhờ AI biên soạn đề thi..."):
+                        md_content = generate_quiz_from_ai(chu_de, muc_do)
+                        if md_content:
+                            data = parse_markdown_quiz(md_content)
+                else:
+                    st.warning("Vui lòng nhập chủ đề!")
+                    
+        else: # Tự nhập Markdown
+            manual_md = st.text_area("Dán mã Markdown bộ câu hỏi vào đây:", height=200)
+            if st.button("🚀 Xây Dựng Quiz Từ Text & Lấy Link", type="primary"):
+                if manual_md:
+                    data = parse_markdown_quiz(manual_md)
+                else:
+                    st.warning("Vui lòng dán nội dung Markdown!")
+        
+        # Xử lý sau khi tạo thành công (Chung cho cả AI và Tự nhập)
+        if data is not None:
+            if len(data) > 0:
                 quiz_id = save_quiz(data)
                 st.success("🎉 Tạo đề thành công!")
                 st.info(f"MÃ GAME CỦA BẠN: **{quiz_id}**")
                 
                 # Tạo link chia sẻ
-                # st.code(f"Link truy cập: https://kho-tang-hoc.streamlit.app/?id={quiz_id}")
                 st.code(f"Link truy cập nhanh: http://localhost:8501/?id={quiz_id}")
                 
                 st.divider()
@@ -143,8 +206,9 @@ if not st.session_state.active_quiz_id:
                             else: st.markdown(f"- {opt}")
                         st.info(f"💡 Giải thích: {q['explanation']}")
             else:
-                st.warning("Không tìm thấy câu hỏi hợp lệ trong Markdown.")
+                st.error("Không tìm thấy câu hỏi hợp lệ. Hãy kiểm tra lại định dạng!")
 
+    # ---------------- TAB 3: THỐNG KÊ ----------------
     with tab_tk:
         st.subheader("📈 Phân Tích Kết Quả & Lỗi Sai")
         stat_id = st.text_input("Nhập Mã Game để xem thống kê:").strip().upper()
@@ -165,7 +229,7 @@ if not st.session_state.active_quiz_id:
             else:
                 st.warning("Chưa có dữ liệu cho Mã Game này.")
 
-# LUỒNG B: TRONG PHÒNG THI
+# LUỒNG B: TRONG PHÒNG THI (HỌC SINH LÀM BÀI)
 else:
     # Nạp dữ liệu quiz
     if not st.session_state.quiz_data:
