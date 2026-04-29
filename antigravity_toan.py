@@ -88,35 +88,70 @@ inject_custom_css()
 
 # --- 4. TRÌNH BIÊN DỊCH MARKDOWN (ĐÃ FIX LỖI) ---
 def parse_markdown_quiz(md_content):
-    md_content = md_content.replace(r'\frac', r'\dfrac') # Tự động làm to phân số
+    # Tự động làm to phân số Toán học
+    md_content = md_content.replace(r'\frac', r'\dfrac')
     quiz_data = []
-    blocks = re.split(r'\n\s*\n', md_content.strip())
+    
+    # Cắt khối văn bản dựa trên chữ "Câu" hoặc "- Câu hỏi"
+    blocks = re.split(r'(?m)^[-*\s]*(?:\*\*|### )?Câu', md_content)
     
     for block in blocks:
-        lines = block.strip().split('\n')
-        question, options, answer, explanation = "", [], "", "Không có giải thích chi tiết."
-        
-        for line in lines:
-            # LÀM SẠCH DỮ LIỆU CỰC MẠNH
-            # 1. Xóa bỏ thẻ in đậm, in nghiêng của Markdown (* và #)
-            line = line.replace('*', '').replace('#', '').strip()
-            # 2. Xóa bỏ các dấu gạch đầu dòng (- hoặc *) ở đầu câu
-            line = re.sub(r'^[-]\s+', '', line)
+        if not block.strip():
+            continue
             
-            if re.match(r'^Câu', line):
-                question = re.sub(r'^Câu \d+:\s*', '', line).strip()
-            elif re.match(r'^[A-D][\.\)]', line):
-                options.append(re.sub(r'^[A-D][\.\)]\s*', '', line).strip())
-            elif "Đáp án:" in line:
-                # Lấy chính xác ký tự cuối cùng để tránh dính khoảng trắng hay ký tự lạ
-                ans_char = line.split(":")[-1].strip().upper()[-1]
-                if ans_char in "ABCD" and len(options) >= (ord(ans_char)-65+1):
-                    answer = options[ord(ans_char)-65]
-            elif "Giải thích:" in line:
-                explanation = line.split(":")[-1].strip()
+        # Xóa các dấu in đậm để dễ đọc
+        block = block.replace('**', '')
+        
+        question = ""
+        options = []
+        answer = ""
+        explanation = "Không có giải thích chi tiết."
+        
+        # 1. Tách phần thân câu hỏi (Từ đầu đến trước chữ "A.")
+        q_split = re.split(r'\bA\.', block, 1)
+        if len(q_split) > 1:
+            # Lấy tiêu đề câu hỏi (xóa bỏ chữ "hỏi:" hoặc số thứ tự "1:")
+            question = re.sub(r'^(?:hỏi)?\s*\d*:\s*', '', q_split[0]).strip()
+            rest_of_block = 'A.' + q_split[1]
+        else:
+            continue # Nếu câu này không có đáp án A., bỏ qua
+            
+        # 2. Tìm các lựa chọn A, B, C, D (Cho phép nằm trên cùng 1 dòng)
+        opt_a = re.search(r'\bA\.(.*?)(?=\bB\.|Đáp\s*án:|Giải\s*thích:|$)', rest_of_block, re.DOTALL)
+        opt_b = re.search(r'\bB\.(.*?)(?=\bC\.|Đáp\s*án:|Giải\s*thích:|$)', rest_of_block, re.DOTALL)
+        opt_c = re.search(r'\bC\.(.*?)(?=\bD\.|Đáp\s*án:|Giải\s*thích:|$)', rest_of_block, re.DOTALL)
+        opt_d = re.search(r'\bD\.(.*?)(?=Đáp\s*án:|Giải\s*thích:|$)', rest_of_block, re.DOTALL)
+        
+        if opt_a: options.append(opt_a.group(1).strip())
+        if opt_b: options.append(opt_b.group(1).strip())
+        if opt_c: options.append(opt_c.group(1).strip())
+        if opt_d: options.append(opt_d.group(1).strip())
+        
+        # 3. Trích xuất Đáp án đúng
+        ans_match = re.search(r'Đáp\s*án:\s*([A-D])', rest_of_block, re.IGNORECASE)
+        if ans_match:
+            ans_char = ans_match.group(1).upper()
+            idx = ord(ans_char) - 65
+            if 0 <= idx < len(options):
+                answer = options[idx]
                 
-        if question and len(options) >= 2 and answer:
-            quiz_data.append({"question": question, "options": options, "answer": answer, "explanation": explanation})
+        # 4. Trích xuất Giải thích
+        exp_match = re.search(r'Giải\s*thích:(.*?)$', rest_of_block, re.DOTALL | re.IGNORECASE)
+        if exp_match:
+            explanation = exp_match.group(1).strip()
+            
+        # Kiểm tra hợp lệ (Có câu hỏi và ít nhất 2 đáp án)
+        if question and len(options) >= 2:
+            # Nếu người dùng quên ghi "Đáp án: X", tạm lấy đáp án đầu tiên làm mốc để không bị lỗi ứng dụng
+            if not answer:
+                answer = options[0] 
+                
+            quiz_data.append({
+                "question": question,
+                "options": options,
+                "answer": answer,
+                "explanation": explanation
+            })
             
     return quiz_data
 
