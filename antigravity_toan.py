@@ -4,6 +4,7 @@ import json
 import uuid
 import re
 import os
+import requests
 import google.generativeai as genai
 from collections import Counter
 
@@ -11,34 +12,46 @@ from collections import Counter
 # Bạn hãy thay 'YOUR_API_KEY' bằng API Key lấy từ Google AI Studio nhé
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY"))
 
+FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://console.firebase.google.com/project/kho-tang-hoc/database/kho-tang-hoc-default-rtdb/data/~2F")
+
 # --- Cấu hình trang ---
 st.set_page_config(page_title="Kho Tàng Học", page_icon="📖", layout="centered")
 
-# --- 1. HÀM LƯU TRỮ (DATABASE LOKAL) ---
+# --- 1. HÀM LƯU TRỮ (FIREBASE) ---
 def save_quiz(quiz_data):
     quiz_id = str(uuid.uuid4().hex)[:6].upper()
-    with open(f"quiz_{quiz_id}.json", "w", encoding="utf-8") as f:
-        json.dump(quiz_data, f, ensure_ascii=False)
+    try:
+        requests.put(f"{FIREBASE_URL}/quizzes/{quiz_id}.json", json=quiz_data)
+    except Exception as e:
+        print(f"Lỗi khi lưu quiz: {e}")
     return quiz_id
 
 def load_quiz(quiz_id):
     try:
-        with open(f"quiz_{quiz_id}.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        res = requests.get(f"{FIREBASE_URL}/quizzes/{quiz_id}.json")
+        if res.status_code == 200 and res.json() is not None:
+            return res.json()
+        return None
+    except Exception as e:
+        print(f"Lỗi khi tải quiz: {e}")
         return None
 
 def save_result(quiz_id, name, lop, score, wrong_answers):
     lb = load_leaderboard(quiz_id) or []
     lb.append({"Tên": name, "Lớp": lop, "Điểm": score, "Lỗi sai": wrong_answers})
-    with open(f"leaderboard_{quiz_id}.json", "w", encoding="utf-8") as f:
-        json.dump(lb, f, ensure_ascii=False)
+    try:
+        requests.put(f"{FIREBASE_URL}/leaderboards/{quiz_id}.json", json=lb)
+    except Exception as e:
+        print(f"Lỗi khi lưu kết quả: {e}")
 
 def load_leaderboard(quiz_id):
     try:
-        with open(f"leaderboard_{quiz_id}.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        res = requests.get(f"{FIREBASE_URL}/leaderboards/{quiz_id}.json")
+        if res.status_code == 200 and res.json() is not None:
+            return res.json()
+        return None
+    except Exception as e:
+        print(f"Lỗi khi tải bảng xếp hạng: {e}")
         return None
 
 # --- 2. KHỞI TẠO STATE ---
