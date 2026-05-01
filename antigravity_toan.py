@@ -12,8 +12,7 @@ from collections import Counter
 # Bạn hãy thay 'YOUR_API_KEY' bằng API Key lấy từ Google AI Studio nhé
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY"))
 
-FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://kho-tang-hoc-default-rtdb.firebaseio.com/
-")
+FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://kho-tang-hoc-default-rtdb.firebaseio.com/")
 # --- Cấu hình trang ---
 st.set_page_config(page_title="Kho Tàng Học", page_icon="📖", layout="centered")
 
